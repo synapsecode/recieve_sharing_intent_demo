@@ -1,0 +1,212 @@
+1. flutter create shareintent_app
+
+(Android)
+1. Edit Android Manifest
+(android/app/src/main/AndroidManifest.xml)
+    (Add this just after <activity ...>)
+    (You can replace android:label with anything. It will appear in the phone share sheet)
+
+    <!--Receive Sharing Intent (URLs)-->
+    <intent-filter>
+        <action android:name="android.intent.action.VIEW" />
+        <category android:name="android.intent.category.DEFAULT" />
+        <category android:name="android.intent.category.BROWSABLE" />
+        <data
+            android:scheme="https"
+            android:host="example.com"
+            android:pathPrefix="/invite"/>
+    </intent-filter>
+    <intent-filter android:label="ShareIntentApp">
+        <action android:name="android.intent.action.SEND" />
+        <category android:name="android.intent.category.DEFAULT" />
+        <data android:mimeType="text/*" />
+    </intent-filter>
+
+
+2. Replace Kotlin Source Code
+(android/app/src/main/kotlin/.../MainActivity.kt)
+    // Replace with your Package name
+    package com.example.shareintent_app
+
+    import android.os.Bundle
+    import io.flutter.embedding.android.FlutterActivity
+    import android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+
+    class MainActivity: FlutterActivity() {
+        override fun onCreate(savedInstanceState: Bundle?) {
+            if (intent.getIntExtra("org.chromium.chrome.extra.TASK_ID", -1) == this.taskId) {
+                this.finish()
+                intent.addFlags(FLAG_ACTIVITY_NEW_TASK);
+                startActivity(intent);
+            }
+            super.onCreate(savedInstanceState)
+        }
+    }
+
+
+
+(iOS)
+0. Update iOS Target from 9.0 -> 12.1
+
+1. Edit Info.plist (ios/Runner/Info.plist)
+    (Add this before </dict></plist>)
+    <!-- RecieveSharingIntent -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>ShareMedia</string>
+			</array>
+		</dict>
+		<dict/>
+	</array>
+
+2. Create a Share Extension:
+	1) Using XCode, go to File/New/Target and Choose "Share Extension"
+	2) Give it a name - "Share Extension"
+	NOTE: Make sure the deployment target for Runner.app and the share extension is the same.
+
+3. Replace NSExtension in ShareExtension plist
+    (ios/Share Extension/Info.plist) as SourceCode
+
+    <key>NSExtension</key>
+    <dict>
+        <key>NSExtensionAttributes</key>
+        <dict>
+            <key>PHSupportedMediaTypes</key>
+            <array>
+            </array>
+            <key>NSExtensionActivationRule</key>
+            <dict>
+                <!--Add URLSharing Support-->
+                <key>NSExtensionActivationSupportsWebURLWithMaxCount</key>
+                <integer>1</integer>
+            </dict>
+        </dict>
+        <key>NSExtensionMainStoryboard</key>
+        <string>MainInterface</string>
+        <key>NSExtensionPointIdentifier</key>
+        <string>com.apple.share-services</string>
+    </dict>
+
+4. Replace ShareExtension Swift Code
+    (ios/Runner/Share Extension/ShareViewController.swift)
+
+    -> Remember to replace your Bundle Identifier
+
+    import UIKit
+    import Social
+    import MobileCoreServices
+
+    class ShareViewController: SLComposeServiceViewController {
+        // Replace With your Bundle Identifier
+        let hostAppBundleIdentifier = "com.example.shareintentApp"
+        let sharedKey = "ShareKey"
+        var sharedText: [String] = []
+
+        let textContentType = kUTTypeText as String
+        let urlContentType = kUTTypeURL as String
+
+        override func isContentValid() -> Bool { return true }
+
+        override func viewDidLoad() {
+            super.viewDidLoad();
+        }
+
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+
+            if let content = extensionContext!.inputItems[0] as? NSExtensionItem {
+                if let contents = content.attachments {
+                    for (index, attachment) in (contents).enumerated() {
+                        if attachment.hasItemConformingToTypeIdentifier(urlContentType) {
+                            handleUrl(content: content, attachment: attachment, index: index)
+                        }
+                    }
+                }
+            }
+        }
+
+        override func didSelectPost() { print("didSelectPost"); }
+
+        override func configurationItems() -> [Any]! {
+            return []
+        }
+
+        private func handleUrl (content: NSExtensionItem, attachment: NSItemProvider, index: Int) {
+            attachment.loadItem(forTypeIdentifier: urlContentType, options: nil) { [weak self] data, error in
+                if error == nil, let item = data as? URL, let this = self {
+                    this.sharedText.append(item.absoluteString)
+                    if index == (content.attachments?.count)! - 1 {
+                        let userDefaults = UserDefaults(suiteName: "group.\(this.hostAppBundleIdentifier)")
+                        userDefaults?.set(this.sharedText, forKey: this.sharedKey)
+                        userDefaults?.synchronize()
+                        this.redirectToHostApp(type: .text)
+                    }
+                } else {
+                    self?.dismissWithError()
+                }
+            }
+        }
+
+        private func dismissWithError() {
+            print("[ERROR] Error loading data!")
+            let alert = UIAlertController(title: "Error", message: "Error loading data", preferredStyle: .alert)
+            let action = UIAlertAction(title: "Error", style: .cancel) { _ in
+                self.dismiss(animated: true, completion: nil)
+            }
+            alert.addAction(action)
+            present(alert, animated: true, completion: nil)
+            extensionContext!.completeRequest(returningItems: [], completionHandler: nil)
+        }
+
+        private func redirectToHostApp(type: RedirectType) {
+            let url = URL(string: "ShareMedia://dataUrl=\(sharedKey)#\(type)")
+            var responder = self as UIResponder?
+            let selectorOpenURL = sel_registerName("openURL:")
+
+            while (responder != nil) {
+                if (responder?.responds(to: selectorOpenURL))! {
+                    let _ = responder?.perform(selectorOpenURL, with: url)
+                }
+                responder = responder!.next
+            }
+            extensionContext!.completeRequest(returningItems: [], completionHandler: nil)
+        }
+        enum RedirectType { case text }
+    }
+
+5. XCode > Runner > Signing & Capabilities
+    Runner
+        Click on + Capability & Add App Groups
+            Add a new App Group
+                group.<your_bundleid>
+    Do the Same for Share Extension
+
+
+6. Edit Runner.entitlements file
+    Search for Runner.entitlements file in XCode Sidebar
+    Open As Source Code
+    (Add this to the end)
+    <key>com.apple.developer.associated-domains</key>
+    <array>
+        <string>applinks:example.com</string>
+    </array>
+
+7. Some More Changes
+    XCode > Runner > Runner (Under Projects) > Info Tab
+        Configurations Section
+            Debug > Set Share Extension to Debug
+
+
+
+(Universal)
+
+1. Add Code for ShareIntentBuilder
+
+2. Add main.dart Code
+
+3. Run & Test
